@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Inventory App - Viewer/Admin/History</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; margin: 0; padding: 0; }
+    header { background:#0b6; padding:12px 16px; color:#012; display:flex; align-items:center; justify-content:space-between; }
+    main { padding:16px; }
+    nav a { margin-right:12px; color:#012; text-decoration:none; font-weight:600; }
+    .card { background:#fff; padding:12px; margin:8px 0; border-radius:8px; box-shadow:0 1px 4px rgba(0,0,0,0.06);}
+    input,select,textarea { padding:8px; font-size:14px; width:100%; margin:6px 0; box-sizing:border-box; }
+    .grid { display:grid; grid-template-columns: 1fr 320px; gap:12px; }
+    table { width:100%; border-collapse:collapse; }
+    th,td { padding:8px; border-bottom:1px solid #eee; text-align:left; font-size:13px; }
+    button { padding:8px 12px; border-radius:6px; border:0; background:#06a; color:white; cursor:pointer; }
+    .muted { color:#666; font-size:13px; }
+    footer { padding:12px; text-align:center; color:#666; font-size:13px; }
+    .small { font-size:12px; color:#444; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <strong>Inventory App</strong>
+      <span class="muted"> — Viewer / Admin / History</span>
+    </div>
+    <nav>
+      <a href="#viewer">Viewer</a>
+      <a href="#admin">Admin</a>
+      <a href="#history">History</a>
+    </nav>
+  </header>
+
+  <main id="app">
+    <!-- content injected by JS -->
+  </main>
+
+  <footer>Built with Google Sheets + Apps Script • Make sure to set WEB_APP_URL and API_KEY in this file before publish</footer>
+
+<script>
+/* ====== CONFIG - EDIT BEFORE DEPLOY ======
+   Put your deployed Google Apps Script Web App URL (the "Web app" URL)
+   and API_KEY (the same you set in Script Properties).
+   DO NOT commit real secrets to public repos.
+*/
+const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxwYmR5D6QpGDcvhTQPZOWhB-zO-MZLIeIAAvSWW9E74luRbjEk0rnKVUOM18sW0IQi/exec'; // <- set this
+const API_KEY = 'd4f8e7c1-92b3-4c22-a83f-ef71a912b6fd'; // <- set this
+
+/* ====== Helper fetch wrapper ====== */
+async function apiFetch(method='GET', params={}, body=null) {
+  const headers = {'x-api-key': API_KEY};
+  if (method === 'GET') {
+    // attach params as query string
+    const qs = new URLSearchParams(Object.entries(params)).toString();
+    const url = WEB_APP_URL + (qs ? ('?'+qs) : '');
+    const res = await fetch(url, { method: 'GET', headers });
+    return res;
+  } else {
+    // POST
+    const payload = Object.assign({}, body || {}, params || {});
+    const res = await fetch(WEB_APP_URL, {
+      method: 'POST',
+      headers: Object.assign({'Content-Type':'application/json','x-api-key': API_KEY}, {}),
+      body: JSON.stringify(payload)
+    });
+    return res;
+  }
+}
+
+/* ====== UI rendering ====== */
+function el(html) { const div = document.createElement('div'); div.innerHTML = html; return div.firstElementChild; }
+
+async function showViewer() {
+  const container = document.getElementById('app');
+  container.innerHTML = '<div class="card"><h3>Products</h3><div id="productsList">Loading...</div></div>';
+  try {
+    const res = await apiFetch('GET', { action: 'listProducts' });
+    const json = await res.json();
+    if (!json.success) { document.getElementById('productsList').innerText = 'Error: ' + JSON.stringify(json); return; }
+    const rows = json.products || [];
+    if (rows.length === 0) { document.getElementById('productsList').innerHTML = '<p class="muted">No products yet.</p>'; return; }
+    const table = document.createElement('table');
+    table.innerHTML = '<thead><tr><th>SKU</th><th>Name</th><th>Qty</th><th>Category</th><th>Cost</th></tr></thead>';
+    const tbody = document.createElement('tbody');
+    rows.forEach(p => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${p.sku}</td><td>${p.name}</td><td>${p.quantity}</td><td>${p.category || ''}</td><td>${p.cost || ''}</td>`;
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    document.getElementById('productsList').innerHTML = '';
+    document.getElementById('productsList').appendChild(table);
+  } catch (err) {
+    document.getElementById('productsList').innerText = 'Network error: ' + err.message;
+  }
+}
+
+async function showAdmin() {
+  const container = document.getElementById('app');
+  container.innerHTML = `
+    <div class="grid">
+      <div>
+        <div class="card">
+          <h3>Create Product</h3>
+          <label>SKU <input id="p_sku"></label>
+          <label>Name <input id="p_name"></label>
+          <label>Quantity <input id="p_qty" type="number" value="0"></label>
+          <label>Category <input id="p_cat"></label>
+          <label>Cost <input id="p_cost" type="number" value="0"></label>
+          <label>Image URL <input id="p_img"></label>
+          <button id="createBtn">Create Product</button>
+          <div id="createMsg" class="small muted"></div>
+        </div>
+
+        <div class="card">
+          <h3>Adjust via Transaction</h3>
+          <label>SKU <input id="t_sku"></label>
+          <label>Type <select id="t_type"><option value="in">IN</option><option value="out">OUT</option></select></label>
+          <label>Quantity <input id="t_qty" type="number" value="1"></label>
+          <label>Note <input id="t_note"></label>
+          <button id="txBtn">Add Transaction</button>
+          <div id="txMsg" class="small muted"></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="card">
+          <h3>Update / Delete</h3>
+          <label>SKU <input id="u_sku"></label>
+          <label>Name <input id="u_name"></label>
+          <label>Category <input id="u_cat"></label>
+          <label>Cost <input id="u_cost" type="number"></label>
+          <label>Status <select id="u_status"><option value="active">active</option><option value="inactive">inactive</option><option value="deleted">deleted</option></select></label>
+          <button id="updateBtn">Update Product</button>
+          <button id="deleteBtn" style="background:#c33">Delete (mark deleted)</button>
+          <div id="uMsg" class="small muted"></div>
+        </div>
+
+        <div class="card">
+          <h3>Quick Product List</h3>
+          <div id="adminProductList">Loading...</div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('createBtn').onclick = async () => {
+    const sku = document.getElementById('p_sku').value.trim();
+    const name = document.getElementById('p_name').value.trim();
+    const qty = Number(document.getElementById('p_qty').value || 0);
+    const category = document.getElementById('p_cat').value.trim();
+    const cost = Number(document.getElementById('p_cost').value || 0);
+    if (!sku || !name) { document.getElementById('createMsg').innerText = 'SKU and Name required'; return; }
+    document.getElementById('createMsg').innerText = 'Creating...';
+    try {
+      const res = await apiFetch('POST', {}, { action: 'addProduct', sku, name, quantity: qty, category, cost });
+      const j = await res.json();
+      if (!j.success) document.getElementById('createMsg').innerText = 'Error: ' + (j.error || JSON.stringify(j));
+      else {
+        document.getElementById('createMsg').innerText = 'Created: ' + sku;
+        loadAdminProducts();
+      }
+    } catch (err) { document.getElementById('createMsg').innerText = 'Network error'; }
+  };
+
+  document.getElementById('txBtn').onclick = async () => {
+    const sku = document.getElementById('t_sku').value.trim();
+    const type = document.getElementById('t_type').value;
+    const qty = Number(document.getElementById('t_qty').value || 0);
+    const note = document.getElementById('t_note').value || '';
+    if (!sku || !qty) { document.getElementById('txMsg').innerText = 'SKU and quantity required'; return; }
+    document.getElementById('txMsg').innerText = 'Processing...';
+    try {
+      const res = await apiFetch('POST', {}, { action: 'addTransaction', sku, type, quantity: qty, note });
+      const j = await res.json();
+      if (!j.success) document.getElementById('txMsg').innerText = 'Error: ' + (j.error || JSON.stringify(j));
+      else { document.getElementById('txMsg').innerText = `Transaction ${j.transaction.id} ok (balance: ${j.transaction.balanceAfter})`; loadAdminProducts(); }
+    } catch (err) { document.getElementById('txMsg').innerText = 'Network error'; }
+  };
+
+  document.getElementById('updateBtn').onclick = async () => {
+    const sku = document.getElementById('u_sku').value.trim();
+    if (!sku) { document.getElementById('uMsg').innerText = 'SKU required'; return; }
+    const name = document.getElementById('u_name').value.trim();
+    const category = document.getElementById('u_cat').value.trim();
+    const cost = document.getElementById('u_cost').value;
+    const status = document.getElementById('u_status').value;
+    const payload = { action: 'updateProduct', sku };
+    if (name) payload.name = name;
+    if (category) payload.category = category;
+    if (cost) payload.cost = Number(cost);
+    if (status) payload.status = status;
+    document.getElementById('uMsg').innerText = 'Updating...';
+    try {
+      const res = await apiFetch('POST', {}, payload);
+      const j = await res.json();
+      if (!j.success) document.getElementById('uMsg').innerText = 'Error: ' + (j.error || JSON.stringify(j));
+      else { document.getElementById('uMsg').innerText = 'Updated ' + sku; loadAdminProducts(); }
+    } catch (err) { document.getElementById('uMsg').innerText = 'Network error'; }
+  };
+
+  document.getElementById('deleteBtn').onclick = async () => {
+    const sku = document.getElementById('u_sku').value.trim();
+    if (!sku) { document.getElementById('uMsg').innerText = 'SKU required'; return; }
+    if (!confirm('Mark product as deleted and set quantity=0?')) return;
+    document.getElementById('uMsg').innerText = 'Deleting...';
+    try {
+      const res = await apiFetch('POST', {}, { action: 'deleteProduct', sku });
+      const j = await res.json();
+      if (!j.success) document.getElementById('uMsg').innerText = 'Error: ' + (j.error || JSON.stringify(j));
+      else { document.getElementById('uMsg').innerText = 'Deleted ' + sku; loadAdminProducts(); }
+    } catch (err) { document.getElementById('uMsg').innerText = 'Network error'; }
+  };
+
+  loadAdminProducts();
+}
+
+async function loadAdminProducts() {
+  const p = document.getElementById('adminProductList');
+  p.innerText = 'Loading...';
+  try {
+    const res = await apiFetch('GET', { action: 'listProducts' });
+    const json = await res.json();
+    if (!json.success) { p.innerText = 'Error'; return; }
+    const rows = json.products || [];
+    if (rows.length === 0) { p.innerHTML = '<p class="muted">No products yet.</p>'; return; }
+    const table = document.createElement('table');
+    table.innerHTML = '<thead><tr><th>SKU</th><th>Name</th><th>Qty</th></tr></thead>';
+    const tbody = document.createElement('tbody');
+    rows.forEach(r => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${r.sku}</td><td>${r.name}</td><td>${r.quantity}</td>`;
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    p.innerHTML = '';
+    p.appendChild(table);
+  } catch (err) { p.innerText = 'Network error'; }
+}
+
+async function showHistory() {
+  const container = document.getElementById('app');
+  container.innerHTML = `
+    <div class="card">
+      <h3>Transactions</h3>
+      <label>SKU filter <input id="h_sku"></label>
+      <label>Type <select id="h_type"><option value="">All</option><option value="in">IN</option><option value="out">OUT</option></select></label>
+      <label>From (ISO) <input id="h_from" placeholder="YYYY-MM-DD"></label>
+      <label>To (ISO) <input id="h_to" placeholder="YYYY-MM-DD"></label>
+      <button id="h_search">Search</button>
+      <button id="h_export">Export CSV</button>
+      <div id="h_results">No results</div>
+    </div>
+  `;
+  document.getElementById('h_search').onclick = async () => {
+    const sku = document.getElementById('h_sku').value.trim();
+    const type = document.getElementById('h_type').value;
+    const from = document.getElementById('h_from').value;
+    const to = document.getElementById('h_to').value;
+    document.getElementById('h_results').innerText = 'Loading...';
+    try {
+      const params = { action: 'listTransactions' };
+      if (sku) params.sku = sku;
+      if (type) params.type = type;
+      if (from) params.from = from;
+      if (to) params.to = to;
+      const res = await apiFetch('GET', params);
+      const j = await res.json();
+      if (!j.success) document.getElementById('h_results').innerText = 'Error: ' + JSON.stringify(j);
+      else {
+        const rows = j.transactions || [];
+        if (!rows.length) { document.getElementById('h_results').innerHTML = '<p class="muted">No transactions</p>'; return; }
+        const table = document.createElement('table');
+        table.innerHTML = '<thead><tr><th>Time</th><th>SKU</th><th>Type</th><th>Qty</th><th>Note</th><th>Balance</th></tr></thead>';
+        const tbody = document.createElement('tbody');
+        rows.forEach(r => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${r.timestamp}</td><td>${r.sku}</td><td>${r.type}</td><td>${r.quantity}</td><td>${r.note}</td><td>${r.balanceAfter}</td>`;
+          tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        document.getElementById('h_results').innerHTML = '';
+        document.getElementById('h_results').appendChild(table);
+      }
+    } catch (err) {
+      document.getElementById('h_results').innerText = 'Network error';
+    }
+  };
+
+  document.getElementById('h_export').onclick = async () => {
+    const sku = document.getElementById('h_sku').value.trim();
+    const type = document.getElementById('h_type').value;
+    const from = document.getElementById('h_from').value;
+    const to = document.getElementById('h_to').value;
+    const params = { action: 'exportTransactions' };
+    if (sku) params.sku = sku;
+    if (type) params.type = type;
+    if (from) params.from = from;
+    if (to) params.to = to;
+    // open CSV in new tab
+    const qs = new URLSearchParams(params).toString();
+    const url = WEB_APP_URL + '?' + qs;
+    // add API key header isn't possible via anchor; instead we can request via fetch and create blob
+    try {
+      const response = await fetch(url, { method: 'GET', headers: { 'x-api-key': API_KEY } });
+      const csv = await response.text();
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const u = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = u; a.download = 'transactions.csv'; document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(u);
+    } catch (err) { alert('Export failed: ' + err.message); }
+  };
+}
+
+/* navigation */
+function route() {
+  const hash = location.hash.replace('#','') || 'viewer';
+  if (hash === 'viewer') showViewer();
+  else if (hash === 'admin') showAdmin();
+  else if (hash === 'history') showHistory();
+  else showViewer();
+}
+
+window.addEventListener('hashchange', route);
+window.addEventListener('load', route);
+</script>
+</body>
+</html>
